@@ -1,108 +1,208 @@
+# שינויי קוד בפרויקט
 
-Final React Project - Recipes and Authentication Process
+הקובץ הזה כולל את כל השינויים שביצעתי על מנת לשדרג את השרת עבור הפרויקט.
 
-פרויקט גמר - מתכונים ותהליך אימות
+## 1. קובץ: `authMiddleware.js`
 
-This is a React 19 project featuring a recipe management system with account creation and login functionality. Logged-in users can add new recipes, while all users can view the recipe list. The project integrates a client-side application written in React with a Node.js server-side component.
+### שינוי:
+- הוספתי פונקציה שמוודאת שהמשתמש מחובר על ידי קריאה למזהה `user-id` מהכותרת של הבקשה (`req.header('user-id')`).
+- לאחר מכן, בוצעה קריאה לקובץ `db.json` בכדי לאחזר את פרטי המשתמש על בסיס המזהה. אם המשתמש לא נמצא, מוחזרת תשובה עם סטטוס `403` (Unauthorized).
 
-Key Technologies
+### קוד מתוקן:
+~~~js
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
-React 19 with TypeScript
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
-React Router for navigation management
+export default (req, res, next) => {
+    const userId = req.header('user-id');
+    const db = JSON.parse(fs.readFileSync(path.join(__dirname, '../db/db.json')));
 
-MUI for UI styling
+    const user = db.users.find(user => user.id == userId);
+    if (!user) {
+        return res.status(403).json({ message: "Unauthorized" });
+    }
 
-Yup + React Hook Form for recipe submission form validation
+    req.user = user;
+    next();
+};
+~~~
 
-Context API + Reducer for global state management of login
+## 2. קובץ: `authRoutes.js`
 
-MobX for managing recipe state
+### שינוי:
+- הוספתי אפשרות לרשום משתמש חדש בנתיב `/register`, לבדוק אם המשתמש כבר קיים, ולוודא שכל השדות הדרושים קיימים לפני הרישום.
+- הוספתי אפשרות להתחבר באמצעות כתובת דוא"ל וסיסמה בנתיב `/login`.
+- עדכנתי את הנתיב `/` כך שיאפשר עדכון פרטי משתמש (שם, דוא"ל, כתובת, טלפון) רק למשתמשים שמחוברים.
 
-Fetch / Axios for API calls with predefined error handling (e.g., 401 errors)
+### קוד מתוקן:
+~~~js
+import express from 'express';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import authMiddleware from '../middleware/authMiddleware.js';
 
-Node.js + Express for the backend server
+const router = express.Router();
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const dbPath = path.join(__dirname, '../db/db.json');
 
-Project Structure
+// רישום משתמש חדש
+router.post('/register', (req, res) => {
+    console.log(req.body);
 
-📦 project-root
- ┣ 📂 client  # Frontend - React
- ┃ ┣ 📂 src
- ┃ ┃ ┣ 📂 components
- ┃ ┃ ┣ 📂 pages
- ┃ ┃ ┣ 📜 App.tsx
- ┃ ┃ ┣ 📜 index.tsx
- ┃ ┃ ┗ ...
- ┃ ┣ 📜 package.json
- ┃ ┣ 📜 .gitignore
- ┃ ┗ 📜 README.md
- ┣ 📂 server  # Backend - Node.js
- ┃ ┣ 📂 src
- ┃ ┃ ┣ 📂 routes
- ┃ ┃ ┣ 📂 controllers
- ┃ ┃ ┣ 📂 models
- ┃ ┃ ┗ 📜 server.ts
- ┃ ┣ 📜 package.json
- ┃ ┣ 📜 .gitignore
- ┃ ┗ 📜 README.md
- ┣ 📜 .gitignore
- ┗ 📜 README.md (if applicable)
+    const { email, password, name, lname, addres, phone } = req.body;
+    const db = JSON.parse(fs.readFileSync(dbPath));
+    if (db.users.find(user => user.email === email)) {
+        return res.status(400).json({ message: "User already exists" });
+    }
+    if (!email || !password || !name) {
+        return res.status(400).json({ message: "Email, password, and first name are required." });
+    }
+    
+    const newUser = {
+        id: Date.now(),
+        email,
+        password,  // במציאות – להצפין סיסמא
+        name,
+        lname,
+        addres,
+        phone
+    };
 
-Installation and Execution
+    db.users.push(newUser);
+    fs.writeFileSync(dbPath, JSON.stringify(db, null, 2));
 
-1. Install Dependencies
+    res.status(201).json({ message: "User registered successfully", userId: newUser.id });
+});
 
-Run the following commands in the root project directory:
+// התחברות
+router.post('/login', (req, res) => {
+    const { email, password } = req.body;
+    const db = JSON.parse(fs.readFileSync(dbPath));
 
-cd client
-npm install
-cd ../server
-npm install
+    const user = db.users.find(user => user.email === email && user.password === password);
 
-2. Start the Server
+    if (!user) {
+        return res.status(401).json({ message: "Invalid credentials" });
+    }
 
-cd server
-npm run dev
+    res.json({ message: "Login successful", user });
+});
 
-3. Start the Client
+// עדכון פרטי משתמש
+router.put('/', authMiddleware, (req, res) => {
+    const { name, lname, email, addres, phone, password } = req.body;
+    const id = parseInt(req.header('user-id'));
 
-cd client
-npm start
+    const db = JSON.parse(fs.readFileSync(dbPath));
 
-Core Features
+    const user = db.users.find(user => user.id === id);
 
-1. Login and Registration
+    if (!user) {
+        return res.status(404).json({ message: "User not found" });
+    }
 
-Users can register and log in to the system.
+    user.name = name;
+    user.lname = lname;
+    user.email = email;
+    user.addres = addres;
+    user.phone = phone;
+    user.password = password;
 
-After logging in, users can add new recipes.
+    fs.writeFileSync(dbPath, JSON.stringify(db, null, 2));
 
-2. Navigation Menu
+    res.json(user);
+});
 
-Side/Top menu for displaying recipes.
+export default router;
+~~~
 
-Displays a list of all recipes from the server (accessible to all users).
+## 3. קובץ: `recipeRoutes.js`
 
-Clicking on a recipe shows its details on the other side of the screen.
+### שינוי:
+- הוספתי את הנתיב `/` על מנת לשלוף את כל המתכונים ממסד הנתונים.
+- הוספתי את הנתיב `/` גם להוספת מתכון חדש, ומבצע בדיקת אימות באמצעות middleware.
+- הוספתי את האפשרות לעדכן מתכון קיים אם הוא נמצא במסד הנתונים.
 
-3. Recipe Submission (For Logged-in Users Only)
+### קוד מתוקן:
+~~~js
+import express from 'express';
+import fs from 'fs';
+import path from 'path';
+import authMiddleware from '../middleware/authMiddleware.js';
+import { fileURLToPath } from 'url';
 
-Form built with React Hook Form + Yup.
+const router = express.Router();
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const dbPath = path.join(__dirname, '../db/db.json');
 
-Data is sent to the server with User-ID for verification.
+// שליפת כל המתכונים
+router.get('/', (req, res) => {
+    const db = JSON.parse(fs.readFileSync(dbPath));
+    res.json(db.recipes);
+});
 
-4. Recipe Updates (For Logged-in Users Only)
+// הוספת מתכון (רק למשתמש מחובר)
+router.post('/', authMiddleware, (req, res) => {
+    const {
+        title,
+        description,
+        products,
+        ingredients,
+        instructions
+    } = req.body;
+    const db = JSON.parse(fs.readFileSync(dbPath));
 
-Users can update only their own recipes.
+    const newRecipe = {
+        id: Date.now(),
+        title,
+        products,
+        description,
+        authorId: req.header('user-id'),
+        ingredients,
+        instructions,
+    };
 
-Notes
+    db.recipes.push(newRecipe);
+    fs.writeFileSync(dbPath, JSON.stringify(db, null, 2));
 
-Separate .gitignore files exist for client/ and server/ to prevent uploading unwanted files.
+    res.status(201).json({ message: "Recipe added", recipe: newRecipe });
+});
 
+// עדכון מתכון
+router.put('/', authMiddleware, (req, res) => {
+    const {
+        title,
+        description,
+        products,
+        ingredients,
+        instructions
+    } = req.body;
+    const id = parseInt(req.header('recipe-id'));
+    const db = JSON.parse(fs.readFileSync(dbPath));
 
-🚀 Good luck! 😊
+    const recipe = db.recipes.find(recipe => recipe.id === id);
 
-קובצי .gitignore קיימים בנפרד עבור client/ ו-server/ למניעת העלאת קבצים לא רצויים.
+    if (!recipe) {
+        return res.status(404).json({ message: "Recipe not found" });
+    }
 
-🚀 בהצלחה! 😊
+    recipe.title = title;
+    recipe.description = description;
+    recipe.products = products;
+    recipe.ingredients = ingredients;
+    recipe.instructions = instructions;
+    recipe.authorId = req.header('user-id');
+    fs.writeFileSync(dbPath, JSON.stringify(db, null, 2));
 
+    res.json({ message: "Recipe updated", recipe });
+});
+
+export default router;
+~~~
